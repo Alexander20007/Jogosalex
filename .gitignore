@@ -1,5 +1,0 @@
-build/
-godot/.godot/
-*.import
-__pycache__/
-.DS_Store
