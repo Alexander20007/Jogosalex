@@ -77,19 +77,48 @@ jobs:
 
       - name: Preparar Godot e Android
         run: |
-          mkdir -v -p ~/.local/share/godot/export_templates/ ~/.config/godot
-          mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          echo "HOME=$HOME  GODOT_VERSION='$GODOT_VERSION'"
+          echo "--- procurando templates, SDK e Java ---"
+          find / -maxdepth 6 -type d -name export_templates 2>/dev/null || true
+          ls -d /usr/lib/android-sdk /usr/lib/jvm/* 2>/dev/null || true
+          echo "ANDROID_HOME='$ANDROID_HOME' ANDROID_SDK_ROOT='$ANDROID_SDK_ROOT'"
+
+          # templates de exportação (não depende da variável GODOT_VERSION)
+          SRC=$(ls -d /root/.local/share/godot/export_templates/*/ 2>/dev/null | head -n 1)
+          if [ -z "$SRC" ]; then
+            echo "::error::Templates de exportação não encontrados (veja a lista acima)"
+            exit 1
+          fi
+          NAME=$(basename "$SRC")
+          mkdir -p ~/.local/share/godot/export_templates ~/.config/godot
+          cp -r "$SRC" ~/.local/share/godot/export_templates/"$NAME"
+          echo "Templates copiados: $NAME"
+
+          # SDK do Android e Java
+          SDK=/usr/lib/android-sdk
+          if [ ! -d "$SDK" ]; then SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"; fi
+          JAVA=$(ls -d /usr/lib/jvm/*/ 2>/dev/null | head -n 1)
+          JAVA=${JAVA%/}
+          echo "SDK=$SDK  JAVA=$JAVA"
+
+          # chave de debug
           keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android \
             -keystore ~/debug.keystore -storepass android \
             -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
-          godot -v -e --quit --headless || true
-          SETTINGS=$(ls ~/.config/godot/editor_settings-4*.tres | head -n 1)
-          echo "Arquivo de configuração: $SETTINGS"
-          echo 'export/android/android_sdk_path = "/usr/lib/android-sdk"' >> "$SETTINGS"
-          echo 'export/android/java_sdk_path = "/usr/lib/jvm/java-17-openjdk-amd64"' >> "$SETTINGS"
-          echo "export/android/debug_keystore = \"$HOME/debug.keystore\"" >> "$SETTINGS"
-          echo 'export/android/debug_keystore_user = "androiddebugkey"' >> "$SETTINGS"
-          echo 'export/android/debug_keystore_pass = "android"' >> "$SETTINGS"
+
+          # configurações do editor (escritas direto, sem precisar abrir o Godot antes)
+          for F in editor_settings-4.tres editor_settings-4.3.tres; do
+            {
+              echo '[gd_resource type="EditorSettings" format=3]'
+              echo ''
+              echo '[resource]'
+              echo "export/android/android_sdk_path = \"$SDK\""
+              echo "export/android/java_sdk_path = \"$JAVA\""
+              echo "export/android/debug_keystore = \"$HOME/debug.keystore\""
+              echo 'export/android/debug_keystore_user = "androiddebugkey"'
+              echo 'export/android/debug_keystore_pass = "android"'
+            } > ~/.config/godot/$F
+          done
 
       - name: Importar recursos e exportar APK
         run: |
@@ -102,3 +131,4 @@ jobs:
         with:
           name: jogo-apk
           path: build/jogo.apk
+          
