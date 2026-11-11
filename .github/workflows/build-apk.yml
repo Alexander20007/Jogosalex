@@ -1,0 +1,104 @@
+# Coloque este arquivo em .github/workflows/build-apk.yml (FORA do zip).
+# Ele procura qualquer .zip no repositório, extrai, acha o projeto Godot,
+# reconverte o mapa se encontrar o rp_downtown_vv1.bsp e exporta o APK.
+
+name: Gerar APK (Godot)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "**.zip"
+
+jobs:
+  extrair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pillow
+
+      - name: Extrair todos os .zip do repositório
+        run: |
+          mkdir -p work
+          ZIPS=$(find . -name '*.zip' -not -path './.git/*' -not -path './work/*')
+          if [ -z "$ZIPS" ]; then
+            echo "::error::Nenhum .zip encontrado no repositório"
+            exit 1
+          fi
+          for z in $ZIPS; do
+            echo "Extraindo $z"
+            unzip -oq "$z" -d work
+          done
+          find work -maxdepth 3 | head -n 40
+
+      - name: Localizar o projeto Godot
+        run: |
+          GODOT_FILE=$(find work -name project.godot | head -n 1)
+          if [ -z "$GODOT_FILE" ]; then
+            echo "::error::project.godot não encontrado dentro dos zips"
+            exit 1
+          fi
+          PROJ=$(dirname "$GODOT_FILE")
+          echo "Projeto em: $PROJ"
+          cp -r "$PROJ" projeto_final
+          mkdir -p projeto_final/map
+
+      - name: Reconverter o mapa (se o .bsp estiver em algum zip)
+        run: |
+          BSP=$(find work -iname 'rp_downtown_vv1.bsp' | head -n 1)
+          CONV=$(find work -name bsp2obj.py | head -n 1)
+          if [ -n "$BSP" ] && [ -n "$CONV" ]; then
+            echo "Convertendo $BSP"
+            python "$CONV" "$BSP" projeto_final/map
+          else
+            echo "Sem .bsp (ou sem bsp2obj.py): usando o mapa já convertido no projeto"
+          fi
+          ls projeto_final/map | head
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: projeto
+          path: projeto_final
+
+  apk:
+    needs: extrair
+    runs-on: ubuntu-latest
+    container: barichello/godot-ci:4.3
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: projeto
+          path: projeto_final
+
+      - name: Preparar Godot e Android
+        run: |
+          mkdir -v -p ~/.local/share/godot/export_templates/ ~/.config/godot
+          mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android \
+            -keystore ~/debug.keystore -storepass android \
+            -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+          godot -v -e --quit --headless || true
+          SETTINGS=$(ls ~/.config/godot/editor_settings-4*.tres | head -n 1)
+          echo "Arquivo de configuração: $SETTINGS"
+          echo 'export/android/android_sdk_path = "/usr/lib/android-sdk"' >> "$SETTINGS"
+          echo 'export/android/java_sdk_path = "/usr/lib/jvm/java-17-openjdk-amd64"' >> "$SETTINGS"
+          echo "export/android/debug_keystore = \"$HOME/debug.keystore\"" >> "$SETTINGS"
+          echo 'export/android/debug_keystore_user = "androiddebugkey"' >> "$SETTINGS"
+          echo 'export/android/debug_keystore_pass = "android"' >> "$SETTINGS"
+
+      - name: Importar recursos e exportar APK
+        run: |
+          mkdir -p build
+          cd projeto_final
+          godot --headless --import
+          godot --headless --export-debug "Android" ../build/jogo.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jogo-apk
+          path: build/jogo.apk
